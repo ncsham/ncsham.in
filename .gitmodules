@@ -1,0 +1,9 @@
+[submodule "themes/hugo-noir"]
+	path = themes/hugo-noir
+	url = https://github.com/prxshetty/hugo-noir
+[submodule "themes/void"]
+	path = themes/void
+	url = https://github.com/Daucloud/hugo-theme-void
+[submodule "themes/rusty-typewriter"]
+	path = themes/rusty-typewriter
+	url = https://github.com/math-queiroz/rusty-typewriter.git

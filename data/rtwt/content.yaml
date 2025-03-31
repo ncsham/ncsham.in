@@ -1,0 +1,15 @@
+home:
+  image: 'images/greetings.jpg'
+  greetings: 'The NCShams Blog!'
+  text: 'I am Nitheesh Chandra Shamanthula, A Passionate DevOps Engineer Based Out of India with 4+ Years of Experience'
+side:
+  home:
+  - title: 'Github'
+    imagePath: 'images/github.webp'
+    imageHref: 'https://github.com/ncsham'
+    imageWidth: '20%'
+  - title: 'LinkedIn'
+    imagePath: 'images/linkedin.webp'
+    imageHref: 'https://www.linkedin.com/in/nitheesh-chandra-shamanthula-b02a7b149/'
+    imageWidth: '20%'
+
