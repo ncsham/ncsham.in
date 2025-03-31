@@ -1,6 +1,7 @@
 ---
 title: "About"
 date: '2025-03-31'
+type: 'blank'
 menu: "main"
 description: "About Me"
 ---
