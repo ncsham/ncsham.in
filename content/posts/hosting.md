@@ -9,3 +9,4 @@ This Post Contains Whole End to End Things to do In order to host this website u
 
 ### References
 - [Hugo Directory Structure](https://www.jakewiesler.com/blog/hugo-directory-structure)
+- [Hugo Actually Explained](https://www.youtube.com/watch?v=ZFL09qhKi5I)
