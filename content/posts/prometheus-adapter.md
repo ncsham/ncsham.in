@@ -133,6 +133,8 @@ Briefly We can say
   - `metricsQuery` tells what query to make to prometheus when a k8s api endpoint is called i.e in 2 point above. 
     > NOTE: we have taken rate[1m] in the metrics query
 
+For More Information About Configuration, check [Configuration Deep Dive](https://github.com/kubernetes-sigs/prometheus-adapter/blob/master/docs/config.md)
+
 Above can be little confusing at the start. But once we start adding the rules, it will make more sense.
 
 Lets Query the API to Now see whether the metrics are getting exposed when we made one HTTP Request above.
@@ -296,6 +298,116 @@ I0401 09:45:00.062979       1 horizontal.go:881] "Successfully rescaled" logger=
 ```
 
 So Basically our HPA is correctly working as Expected with Custom Prometheus Metrics.
+
+### How Adapter Works
+- prometheus-adapter is a clone of API server but just only exposing custom.metrics.k8s.io/v1beta1 endpoints
+  > NOTE: Directly making requests to the service endpoint of prometheus-adapter, will not work as it expects the authorization of the request. When we do via kubectl we are passing auth token, which gets passed to the adapter service when proxying the request.
+- When we install prometheus adapter via the helm chart, it adds a API Service Manifest below
+  ```yaml
+    # Source: prometheus-adapter/templates/custom-metrics-apiservice.yaml
+    apiVersion: apiregistration.k8s.io/v1beta1
+    kind: APIService
+    metadata:
+    labels:    
+        helm.sh/chart: prometheus-adapter-4.13.0
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/component: metrics
+        app.kubernetes.io/part-of: prometheus-adapter
+        app.kubernetes.io/name: prometheus-adapter
+        app.kubernetes.io/instance: prometheus-adapter
+        app.kubernetes.io/version: "v0.12.0"
+    name: v1beta1.custom.metrics.k8s.io
+    spec:
+    service:
+        name: prometheus-adapter
+        namespace: "default"
+    group: custom.metrics.k8s.io
+    version: v1beta1
+    insecureSkipTLSVerify: true
+    groupPriorityMinimum: 100
+    versionPriority: 100
+  ```
+  > TIP: In order to register a New API at APIServer, we create a manifest of type APIService and apply. Then API Server will start exposing that API.
+- As we can see for requests which hit `v1beta1.custom.metrics.k8s.io` endpoints, it gonna route/proxy them to service named `prometheus-adapter` which is running inside the cluster. i.e `HPA -> API Server -> prometheus-adapter -> prometheus`
+- On My testing have observed that k8s custom metrics API shows updated values on the spot , when prometheus scraped a latest datapoint. So seems like custom metrics API queries make on the fly queries to prometheus and gets the values. Initially suspected that there will periodic queries to prometheus in a recurring interval but not seems so.
+
+### What Happens When Adapter Is Down?
+- Have made replica count of prometheus-adapter as zero
+```
+`--> kubectl get APIService v1beta1.custom.metrics.k8s.io
+NAME                            SERVICE                      AVAILABLE                  AGE
+v1beta1.custom.metrics.k8s.io   default/prometheus-adapter   False (MissingEndpoints)   5d23h
+
+`--> kubectl describe hpa gohttpserver
+Name:                                                  gohttpserver
+Namespace:                                             default
+Labels:                                                <none>
+Annotations:                                           <none>
+CreationTimestamp:                                     Sun, 30 Mar 2025 18:00:09 +0530
+Reference:                                             Deployment/gohttpserver
+Metrics:                                               ( current / target )
+  "http_requests_per_second" on Pod/* (target value):  <unknown> / 100
+Min replicas:                                          1
+Max replicas:                                          2
+Deployment pods:                                       1 current / 1 desired
+Conditions:
+  Type            Status  Reason                 Message
+  ----            ------  ------                 -------
+  AbleToScale     True    SucceededGetScale      the HPA controller was able to get the target's current scale
+  ScalingActive   False   FailedGetObjectMetric  the HPA was unable to compute the replica count: unable to get metric http_requests_per_second: Pod on default */unable to fetch metrics from custom metrics API: no known available metric versions found
+  ScalingLimited  True    TooFewReplicas         the desired replica count is less than the minimum replica count
+Events:
+  Type     Reason                        Age                    From                       Message
+  ----     ------                        ----                   ----                       -------
+  Warning  FailedComputeMetricsReplicas  7m26s                  horizontal-pod-autoscaler  invalid metrics (1 invalid out of 1), first error is: failed to get object metric value: unable to get metric http_requests_per_second: Pod on default */unable to fetch metrics from custom metrics API: the server is currently unable to handle the request (get pods.custom.metrics.k8s.io *)
+  Warning  FailedComputeMetricsReplicas  6m41s (x7 over 5h38m)  horizontal-pod-autoscaler  invalid metrics (1 invalid out of 1), first error is: failed to get object metric value: unable to get metric http_requests_per_second: Pod on default */unable to fetch metrics from custom metrics API: no known available metric versions found
+  Warning  FailedGetObjectMetric         56s (x30 over 5h38m)   horizontal-pod-autoscaler  unable to get metric http_requests_per_second: Pod on default */unable to fetch metrics from custom metrics API: no known available metric versions found
+```
+- kube-controller-manager Logs
+```
+E0401 12:04:39.273530       1 horizontal.go:270] failed to compute desired number of replicas based on listed metrics for Deployment/default/gohttpserver: invalid metrics (1 invalid out of 1), first error is: failed to get object metric value: unable to get metric http_requests_per_second: Pod on default */unable to fetch metrics from custom metrics API: no known available metric versions found
+```
+- We can clearly see that no scaling activity happened when adapter is down, nothing else impacted. So basically **when adapter is being down, HPA wont be able to do any scaling decisions**
+
+### What Happens When Prometheus Is Down?
+- Have changed the service name which adapter is pointing to. i.e `.prometheus.url` from `http://kps-kube-prometheus-stack-prometheus.default.svc` to `http://doesnt-exist.default.svc`
+```
+`--> kubectl get APIService v1beta1.custom.metrics.k8s.io
+NAME                            SERVICE                      AVAILABLE   AGE
+v1beta1.custom.metrics.k8s.io   default/prometheus-adapter   True        5d23h
+
+`--> kubectl describe hpa gohttpserver
+Name:                                                  gohttpserver
+Namespace:                                             default
+Labels:                                                <none>
+Annotations:                                           <none>
+CreationTimestamp:                                     Tue, 01 Apr 2025 17:48:51 +0530
+Reference:                                             Deployment/gohttpserver
+Metrics:                                               ( current / target )
+  "http_requests_per_second" on Pod/* (target value):  <unknown> / 100
+Min replicas:                                          1
+Max replicas:                                          2
+Deployment pods:                                       1 current / 0 desired
+Conditions:
+  Type           Status  Reason                 Message
+  ----           ------  ------                 -------
+  AbleToScale    True    SucceededGetScale      the HPA controller was able to get the target's current scale
+  ScalingActive  False   FailedGetObjectMetric  the HPA was unable to compute the replica count: unable to get metric http_requests_per_second: Pod on default */unable to fetch metrics from custom metrics API: the server could not find the metric http_requests_per_second for pods
+Events:
+  Type     Reason                        Age   From                       Message
+  ----     ------                        ----  ----                       -------
+  Warning  FailedGetObjectMetric         7s    horizontal-pod-autoscaler  unable to get metric http_requests_per_second: Pod on default */unable to fetch metrics from custom metrics API: the server could not find the metric http_requests_per_second for pods
+  Warning  FailedComputeMetricsReplicas  7s    horizontal-pod-autoscaler  invalid metrics (1 invalid out of 1), first error is: failed to get object metric value: unable to get metric http_requests_per_second: Pod on default */unable to fetch metrics from custom metrics API: the server could not find the metric http_requests_per_second for pods
+```
+- Adapter Logs
+```
+I0401 12:14:55.590108       1 httplog.go:132] "HTTP" verb="GET" URI="/apis/custom.metrics.k8s.io/v1beta1/namespaces/default/pods/%2A/http_requests_per_second" latency="11.462748ms" userAgent="kube-controller-manager/v1.30.0 (linux/arm64) kubernetes/7c48c2b/system:serviceaccount:kube-system:horizontal-pod-autoscaler" audit-ID="a4e7d5b6-35a2-4d9e-af88-abff69422a87" srcIP="10.244.0.1:63581" resp=404
+
+E0401 12:16:20.583815       1 provider.go:229] unable to update list of all metrics: unable to fetch metrics for query "http_requests_total{job=\"gohttpserver\"}": Get "http://doesnt-exits.default.svc:9090/api/v1/series?match%5B%5D=http_requests_total%7Bjob%3D%22gohttpserver%22%7D&start=1743509720.558": dial tcp: lookup doesnt-exits.default.svc on 10.96.0.10:53: no such host
+
+I0401 12:16:37.110356       1 httplog.go:132] "HTTP" verb="GET" URI="/apis/custom.metrics.k8s.io/v1beta1" latency="7.098665ms" userAgent="Go-http-client/2.0" audit-ID="76b292d3-9719-4d88-a667-70959dfe5e1e" srcIP="10.244.0.1:3114" resp=200
+```
+> 📌 **So Basically when prometheus or prometheus-adapter go down, HPA Scaling Decision for custom metrics will not be made/halted.**
 
 ## References
 - [Adapter Github](https://github.com/kubernetes-sigs/prometheus-adapter/tree/master?tab=readme-ov-file)
