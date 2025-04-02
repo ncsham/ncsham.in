@@ -61,10 +61,12 @@ Basic Golang HTTP Server used for Reference was: https://github.com/ncsham/https
 ### Install Simple Golang HTTP Server
 ```bash
 git clone https://github.com/ncsham/httpserver.git
+cd httpserver/
 eval $(minikube docker-env) # In Order to Port Image to Minikube
 docker build -t httpserver .
 kubectl apply -f k8s.yaml
 ```
+> NOTE: If you are using ubuntu, there can be issues with the docker unable to read CA Certificate. Please Refer [StackOverflow](https://stackoverflow.com/a/74372643)
 
 `k8s.yaml` contains Deployment, Service and ServiceMonitor so prometheus can start scraping the metrics. 
 > NOTE: we need to add `release: kps` for prometheus-operator to add it as a target in prometheus scrape config. Adding this label can be avoided by setting `serviceMonitorSelector` to `{}` in kube-prometheus-stack helm chart.
